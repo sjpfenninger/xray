@@ -17,7 +17,7 @@ from . import variable
 from . import alignment
 from . import formatting
 from .. import backends, conventions
-from .alignment import align
+from .alignment import align, partial_align
 from .coordinates import DatasetCoordinates, Indexes
 from .common import ImplementsDatasetReduce, AttrAccessMixin
 from .utils import Frozen, SortedKeysDict, ChainMap
@@ -196,15 +196,21 @@ def _expand_arrays(raw_variables, old_variables={}, compat='identical'):
                                  'first value: %r\nsecond value: %r'
                                  % (name, variables[name], var))
             if compat == 'broadcast_equals':
-                new_dims = _as_dataset_variable(name, var).dims
                 common_dims = OrderedDict(zip(variables[name].dims,
                                               variables[name].shape))
                 common_dims.update(zip(var.dims, var.shape))
                 variables[name] = variables[name].set_dims(common_dims)
 
+    # align all DataArray objects in new_variables, preserving existing indexes
+    old_indexes = dict((k, v) for k, v in old_variables.items() if k in v.dims)
+    alignable = [k for k, v in raw_variables.items() if hasattr(v, 'indexes')]
+    aligned = partial_align(old_indexes, [raw_variables[a] for a in alignable],
+                            join='outer')
+    new_data_arrays = dict(zip(alignable, aligned))
+
     for name, var in iteritems(raw_variables):
-        if hasattr(var, 'coords'):
-            # it's a DataArray
+        if name in new_data_arrays:
+            var = new_data_arrays[name]
             new_coord_names.update(var.coords)
             for dim, coord in iteritems(var.coords):
                 if dim != name:
@@ -361,8 +367,8 @@ class Dataset(Mapping, ImplementsDatasetReduce, AttrAccessMixin):
         if attrs is not None:
             self.attrs = attrs
 
-    def _add_missing_coords(self):
-        """Add missing coordinates IN-PLACE to _arrays
+    def _add_missing_coords_inplace(self):
+        """Add missing coordinates to self._arrays
         """
         for dim, size in iteritems(self.dims):
             if dim not in self._arrays:
@@ -397,7 +403,7 @@ class Dataset(Mapping, ImplementsDatasetReduce, AttrAccessMixin):
         # all checks are complete: it's safe to update
         self._arrays = arrays
         self._dims = dims
-        self._add_missing_coords()
+        self._add_missing_coords_inplace()
         self._coord_names.update(dims)
         self._coord_names.update(new_coord_names)
 
